@@ -1,0 +1,49 @@
+{
+  "name": "llm-dom-selector",
+  "version": "1.0.0",
+  "description": "A TypeScript library that uses LLM to intelligently select DOM elements from web pages using Playwright",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "example": "cd example && npm run start",
+    "prepublishOnly": "npm run build",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "llm",
+    "dom",
+    "selector",
+    "playwright",
+    "automation",
+    "ai",
+    "typescript"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@langchain/core": "^0.3.68",
+    "playwright": "^1.40.0"
+  },
+  "devDependencies": {
+    "@langchain/openai": "^0.6.14",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.19.19",
+    "jest": "^29.0.0",
+    "ts-jest": "^29.0.0",
+    "ts-node": "^10.0.0",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

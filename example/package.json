@@ -1,0 +1,20 @@
+{
+  "name": "llm-dom-selector-example",
+  "version": "1.0.0",
+  "description": "Example usage of llm-dom-selector",
+  "main": "example.ts",
+  "scripts": {
+    "start": "ts-node example.ts",
+    "build": "tsc example.ts"
+  },
+  "dependencies": {
+    "llm-dom-selector": "file:..",
+    "@langchain/openai": "^0.1.0",
+    "playwright": "^1.40.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.0.0"
+  }
+}
