@@ -128,7 +128,7 @@ export class DomService {
     elementNode.isTopElement = nodeData.isTopElement || false;
     elementNode.isInViewport = nodeData.isInViewport || false;
     elementNode.shadowRoot = nodeData.shadowRoot || false;
-    elementNode.highlightIndex = nodeData.highlightIndex || null;
+    elementNode.highlightIndex = nodeData.highlightIndex ?? null;
     elementNode.viewportInfo = viewportInfo;
     const childrenIds = nodeData.children || [];
 

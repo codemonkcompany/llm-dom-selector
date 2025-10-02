@@ -1,9 +1,37 @@
 {
-  "name": "llm-dom-selector",
+  "name": "@codemonkcompany/llm-dom-selector",
   "version": "1.0.0",
   "description": "A TypeScript library that uses LLM to intelligently select DOM elements from web pages using Playwright",
+  "keywords": [
+    "llm",
+    "dom",
+    "selector",
+    "playwright",
+    "automation",
+    "ai",
+    "typescript"
+  ],
+  "homepage": "https://github.com/codemonkcompany/llm-dom-selector#readme",
+  "bugs": {
+    "url": "https://github.com/codemonkcompany/llm-dom-selector/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codemonkcompany/llm-dom-selector.git"
+  },
+  "license": "MIT",
+  "author": "Your Name",
+  "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "directories": {
+    "example": "example"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -14,17 +42,6 @@
     "prepublishOnly": "npm run build",
     "clean": "rm -rf dist"
   },
-  "keywords": [
-    "llm",
-    "dom",
-    "selector",
-    "playwright",
-    "automation",
-    "ai",
-    "typescript"
-  ],
-  "author": "Your Name",
-  "license": "MIT",
   "dependencies": {
     "@langchain/core": "^0.3.68",
     "playwright": "^1.40.0"
@@ -38,11 +55,6 @@
     "ts-node": "^10.0.0",
     "typescript": "^5.0.0"
   },
-  "files": [
-    "dist/**/*",
-    "README.md",
-    "LICENSE"
-  ],
   "engines": {
     "node": ">=16.0.0"
   }
