@@ -43,10 +43,11 @@ export function buildDomTreeOverlay(args: {
     document.body.appendChild(highlightContainer);
   }
 
-  // Node map and counter
+  // Node map and counters
   const nodeMap: Record<string, any> = {};
   let nodeIdCounter = 0;
-  let highlightIndex = 0;
+  let highlightIndex = 0; // For interactive elements only
+  let elementIndex = 0; // For ALL elements
 
   // Helper function to generate XPath
   function getXPath(element: Element): string {
@@ -233,10 +234,16 @@ export function buildDomTreeOverlay(args: {
     const attributes = getElementAttributes(element);
     const text = getElementText(element);
 
-    // Determine if this element should get a highlight index
+    // Determine if this element should get a highlight index (interactive only)
     let currentHighlightIndex: number | null = null;
     if (isVisible && isInteractive) {
       currentHighlightIndex = highlightIndex++;
+    }
+
+    // Assign index to ALL elements (both interactive and non-interactive)
+    let currentElementIndex: number | null = null;
+    if (currentHighlightIndex !== null || element.nodeType === Node.TEXT_NODE) {
+      currentElementIndex = elementIndex++;
     }
 
     // Create highlight element if needed
@@ -283,7 +290,8 @@ export function buildDomTreeOverlay(args: {
       isTopElement: parentId === null,
       isInViewport: isVisible,
       shadowRoot: false,
-      highlightIndex: currentHighlightIndex,
+      highlightIndex: currentHighlightIndex, // For interactive elements only
+      elementIndex: currentElementIndex, // For ALL elements
       viewport: viewport,
       children,
     };

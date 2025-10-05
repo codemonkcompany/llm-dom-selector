@@ -5,6 +5,7 @@ import {
   DOMState,
   DOMTextNode,
   SelectorMap,
+  ElementMap,
   ViewportInfo,
 } from "../types/dom";
 import { buildDomTreeOverlay } from "../scripts/domExtractor";
@@ -24,19 +25,19 @@ export class DomService {
     focusElement: number = -1,
     viewportExpansion: number = 0
   ): Promise<DOMState> {
-    const [elementTree, selectorMap] = await this.buildDomTree(
+    const [elementTree, selectorMap, elementMap] = await this.buildDomTree(
       highlightElements,
       focusElement,
       viewportExpansion
     );
-    return new DOMState(elementTree, selectorMap);
+    return new DOMState(elementTree, selectorMap, elementMap);
   }
 
   private async buildDomTree(
     highlightElements: boolean,
     focusElement: number,
     viewportExpansion: number
-  ): Promise<[DOMElementNode, SelectorMap]> {
+  ): Promise<[DOMElementNode, SelectorMap, ElementMap]> {
     if ((await this.page.evaluate("1+1")) !== 2) {
       throw new Error("The page cannot evaluate JavaScript code properly");
     }
@@ -62,11 +63,12 @@ export class DomService {
 
   private async constructDomTree(
     evalPage: any
-  ): Promise<[DOMElementNode, SelectorMap]> {
+  ): Promise<[DOMElementNode, SelectorMap, ElementMap]> {
     const jsNodeMap = evalPage.map;
     const jsRootId = evalPage.rootId;
 
-    const selectorMap: SelectorMap = {};
+    const selectorMap: SelectorMap = {}; // Interactive elements only
+    const elementMap: ElementMap = {}; // ALL elements
     const nodeMap: Record<string, DOMBaseNode> = {};
 
     for (const [id, nodeData] of Object.entries(jsNodeMap)) {
@@ -75,8 +77,14 @@ export class DomService {
 
       nodeMap[id] = node;
 
+      // Add to selectorMap if interactive (has highlightIndex)
       if (node instanceof DOMElementNode && node.highlightIndex !== null) {
         selectorMap[node.highlightIndex] = node;
+      }
+
+      // Add to elementMap for ALL elements (has elementIndex)
+      if (node instanceof DOMElementNode && node.elementIndex !== null) {
+        elementMap[node.elementIndex] = node;
       }
 
       if (node instanceof DOMElementNode) {
@@ -96,7 +104,7 @@ export class DomService {
       throw new Error("Failed to parse HTML to dictionary");
     }
 
-    return [htmlToDict, selectorMap];
+    return [htmlToDict, selectorMap, elementMap];
   }
 
   private parseNode(nodeData: any): [DOMBaseNode | null, number[]] {
@@ -128,7 +136,8 @@ export class DomService {
     elementNode.isTopElement = nodeData.isTopElement || false;
     elementNode.isInViewport = nodeData.isInViewport || false;
     elementNode.shadowRoot = nodeData.shadowRoot || false;
-    elementNode.highlightIndex = nodeData.highlightIndex ?? null;
+    elementNode.highlightIndex = nodeData.highlightIndex ?? null; // Interactive only
+    elementNode.elementIndex = nodeData.elementIndex ?? null; // ALL elements
     elementNode.viewportInfo = viewportInfo;
     const childrenIds = nodeData.children || [];
 

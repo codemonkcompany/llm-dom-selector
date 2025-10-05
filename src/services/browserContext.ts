@@ -1,11 +1,12 @@
 import { Page, ElementHandle, FrameLocator } from "playwright";
 import { DomService } from "./domService";
-import { DOMElementNode, SelectorMap } from "../types/dom";
+import { DOMElementNode, SelectorMap, ElementMap } from "../types/dom";
 
 // BrowserState interface based on the original project
 export interface BrowserState {
   elementTree: DOMElementNode;
-  selectorMap: SelectorMap;
+  selectorMap: SelectorMap; // Interactive elements only
+  elementMap: ElementMap; // ALL elements (interactive + non-interactive)
   url: string;
   title: string;
   screenshot: string;
@@ -61,7 +62,8 @@ export class BrowserContext {
 
       this.currentState = {
         elementTree: content.elementTree,
-        selectorMap: content.selectorMap,
+        selectorMap: content.selectorMap, // Interactive only
+        elementMap: content.elementMap, // ALL elements
         url: this.page.url(),
         title: await this.page.title(),
         screenshot,
@@ -126,6 +128,16 @@ export class BrowserContext {
   async getDomElementByIndex(index: number): Promise<DOMElementNode | null> {
     const selectorMap = await this.getSelectorMap();
     return selectorMap[index] || null;
+  }
+
+  async getElementMap(): Promise<ElementMap> {
+    const state = await this.getState();
+    return state.elementMap;
+  }
+
+  async getAllElementByIndex(index: number): Promise<DOMElementNode | null> {
+    const elementMap = await this.getElementMap();
+    return elementMap[index] || null;
   }
 
   // Based on get_locate_element from original project

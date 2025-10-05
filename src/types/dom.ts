@@ -65,7 +65,8 @@ export class DOMElementNode implements DOMBaseNode {
   isTopElement: boolean = false;
   isInViewport: boolean = false;
   shadowRoot: boolean = false;
-  highlightIndex: number | null = null;
+  highlightIndex: number | null = null; // Index for interactive elements only
+  elementIndex: number | null = null; // Index for ALL elements (interactive + non-interactive)
   viewportCoordinates: CoordinateSet | null = null;
   pageCoordinates: CoordinateSet | null = null;
   viewportInfo: ViewportInfo | null = null;
@@ -278,16 +279,28 @@ export class DOMElementNode implements DOMBaseNode {
   }
 }
 
+// Map for interactive elements only (existing)
 export interface SelectorMap {
+  [key: number]: DOMElementNode;
+}
+
+// Map for ALL elements (interactive + non-interactive)
+export interface ElementMap {
   [key: number]: DOMElementNode;
 }
 
 export class DOMState {
   elementTree: DOMElementNode;
-  selectorMap: SelectorMap;
+  selectorMap: SelectorMap; // Interactive elements only
+  elementMap: ElementMap; // ALL elements
 
-  constructor(elementTree: DOMElementNode, selectorMap: SelectorMap) {
+  constructor(
+    elementTree: DOMElementNode,
+    selectorMap: SelectorMap,
+    elementMap: ElementMap
+  ) {
     this.elementTree = elementTree;
     this.selectorMap = selectorMap;
+    this.elementMap = elementMap;
   }
 }

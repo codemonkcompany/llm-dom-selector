@@ -15,6 +15,7 @@ export {
   DOMTextNode,
   DOMState,
   SelectorMap,
+  ElementMap,
   type DOMBaseNode,
   type ViewportInfo,
   type CoordinateSet,
@@ -26,7 +27,7 @@ import { BrowserContext, BrowserState } from "./services/browserContext";
 import { LLMSelector, ElementSelectionResult } from "./services/llmSelector";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { Page } from "playwright";
-import { DOMElementNode } from "./types/dom";
+import { DOMElementNode, ElementMap } from "./types/dom";
 
 export interface LLMDOMSelectorConfig {
   browserContext?: Partial<{
@@ -71,6 +72,19 @@ export class LLMDOMSelector {
   }
 
   /**
+   * Select an element using LLM based on a text description
+   */
+  async selectElementFromAllElements(
+    prompt: string
+  ): Promise<ElementSelectionResult> {
+    const browserState = await this.browserContext.getState();
+    return await this.llmSelector.selectElementFromAllElements(
+      prompt,
+      browserState
+    );
+  }
+
+  /**
    * Get a specific element by its index
    */
   async getElementByIndex(index: number): Promise<DOMElementNode | null> {
@@ -83,6 +97,38 @@ export class LLMDOMSelector {
   async getInteractiveElements(): Promise<DOMElementNode[]> {
     const selectorMap = await this.browserContext.getSelectorMap();
     return Object.values(selectorMap);
+  }
+
+  /**
+   * Get ALL elements (both interactive and non-interactive)
+   */
+  async getAllElements(): Promise<DOMElementNode[]> {
+    const elementMap = await this.browserContext.getElementMap();
+    return Object.values(elementMap);
+  }
+
+  /**
+   * Get the element map for ALL elements (interactive + non-interactive)
+   */
+  async getElementMap(): Promise<ElementMap> {
+    return await this.browserContext.getElementMap();
+  }
+
+  /**
+   * Get non-interactive elements only
+   */
+  async getNonInteractiveElements(): Promise<DOMElementNode[]> {
+    const elementMap = await this.browserContext.getElementMap();
+    return Object.values(elementMap).filter((el) => !el.isInteractive);
+  }
+
+  /**
+   * Get element by elementIndex (works for all elements, not just interactive)
+   */
+  async getElementByElementIndex(
+    index: number
+  ): Promise<DOMElementNode | null> {
+    return await this.browserContext.getAllElementByIndex(index);
   }
 
   /**

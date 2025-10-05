@@ -61,6 +61,7 @@ describe("LLMSelector", () => {
     mockBrowserState = {
       elementTree: element1,
       selectorMap: mockSelectorMap,
+      elementMap: mockSelectorMap, // For testing, use the same map
       url: "https://example.com",
       title: "Test Page",
       screenshot: "",
