@@ -160,6 +160,74 @@ export function buildDomTreeOverlay(args: {
     return false;
   }
 
+  // Helper function to check if element should be included in elementMap
+  // This includes both interactive elements AND content elements (with text or specific tags)
+  function shouldIncludeInElementMap(element: Element): boolean {
+    const tagName = element.tagName.toLowerCase();
+
+    // Content tags that should always be included
+    const contentTags = [
+      "p",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "pre",
+      "blockquote",
+      "abbr",
+      "cite",
+      "code",
+      "strong",
+      "em",
+      "small",
+      "mark",
+      "ul",
+      "ol",
+      "li",
+      "dl",
+      "dt",
+      "dd",
+      "table",
+      "thead",
+      "tbody",
+      "tfoot",
+      "tr",
+      "td",
+      "th",
+      "caption",
+      "col",
+      "colgroup",
+      "img",
+      "picture",
+      "figure",
+      "figcaption",
+      "audio",
+      "video",
+      "source",
+      "track",
+    ];
+
+    // Include if it's a content tag
+    if (contentTags.includes(tagName)) {
+      return true;
+    }
+
+    // Include if element has visible text content
+    const textContent = element.textContent?.trim();
+    if (textContent && textContent.length > 0) {
+      return true;
+    }
+
+    // Include if it's an interactive element
+    if (isElementInteractive(element)) {
+      return true;
+    }
+
+    return false;
+  }
+
   // Helper function to get element attributes
   function getElementAttributes(element: Element): Record<string, string> {
     const attributes: Record<string, string> = {};
@@ -240,9 +308,10 @@ export function buildDomTreeOverlay(args: {
       currentHighlightIndex = highlightIndex++;
     }
 
-    // Assign index to ALL elements (both interactive and non-interactive)
+    // Assign elementIndex to elements that should be in elementMap
+    // This includes interactive elements, content tags, and elements with text
     let currentElementIndex: number | null = null;
-    if (currentHighlightIndex !== null || element.nodeType === Node.TEXT_NODE) {
+    if (shouldIncludeInElementMap(element)) {
       currentElementIndex = elementIndex++;
     }
 
