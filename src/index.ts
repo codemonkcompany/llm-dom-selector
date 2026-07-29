@@ -3,6 +3,7 @@ export {
   LLMSelector,
   type ElementSelectionResult,
   type LLMSelectorConfig,
+  type ElementVisibilityFilter,
 } from "./services/llmSelector";
 export {
   BrowserContext,
@@ -24,7 +25,11 @@ export {
 
 // Main class that combines all functionality
 import { BrowserContext, BrowserState } from "./services/browserContext";
-import { LLMSelector, ElementSelectionResult } from "./services/llmSelector";
+import {
+  LLMSelector,
+  ElementSelectionResult,
+  ElementVisibilityFilter,
+} from "./services/llmSelector";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { Page } from "playwright";
 import { DOMElementNode, ElementMap } from "./types/dom";
@@ -72,15 +77,23 @@ export class LLMDOMSelector {
   }
 
   /**
-   * Select an element using LLM based on a text description
+   * Select an element using LLM based on a text description.
+   *
+   * @param visibilityFilter Restrict the candidate pool before the model
+   * sees it: "visible-only" for an assertion whose target must be visible
+   * (e.g. "is visible", "is in the viewport"), "hidden-only" for one whose
+   * target must be hidden/collapsed/not shown, or "any" (default) to show
+   * every element, each tagged with its actual visibility.
    */
   async selectElementFromAllElements(
-    prompt: string
+    prompt: string,
+    visibilityFilter: ElementVisibilityFilter = "any"
   ): Promise<ElementSelectionResult> {
     const browserState = await this.browserContext.getState();
     return await this.llmSelector.selectElementFromAllElements(
       prompt,
-      browserState
+      browserState,
+      visibilityFilter
     );
   }
 

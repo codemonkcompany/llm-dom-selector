@@ -9,6 +9,22 @@ export interface LLMSelectorConfig {
   maxRetries: number;
 }
 
+/**
+ * Restricts which elements from the "all elements" pool a caller wants
+ * considered at all:
+ * - "any" (default): every element is shown to the model, each tagged with
+ *   its visibility so the model can reason about it.
+ * - "visible-only": elements hidden by CSS (display:none, a responsive
+ *   Tailwind class like `md:hidden` at the current viewport, etc.) are
+ *   removed from the candidate pool before the model ever sees them. Use
+ *   this when the caller's assertion can only ever be true of a visible
+ *   element (e.g. "is visible", "is in the viewport").
+ * - "hidden-only": the inverse — only elements NOT currently visible are
+ *   considered. Use this when the caller's assertion expects the target to
+ *   be hidden/collapsed/not shown.
+ */
+export type ElementVisibilityFilter = "any" | "visible-only" | "hidden-only";
+
 export interface ElementSelectionResult {
   selectedElement: DOMElementNode | null;
   selectedIndex: number | null;
@@ -88,12 +104,14 @@ export class LLMSelector {
    */
   async selectElementFromAllElements(
     prompt: string,
-    browserState: BrowserState
+    browserState: BrowserState,
+    visibilityFilter: ElementVisibilityFilter = "any"
   ): Promise<ElementSelectionResult> {
     const systemPrompt = this.createSystemPromptForAllElements();
     const userMessage = this.createUserMessageForAllElements(
       prompt,
-      browserState
+      browserState,
+      visibilityFilter
     );
 
     const messages = [systemPrompt, userMessage];
@@ -343,10 +361,16 @@ ALL Elements (interactive and non-interactive) are provided in this format:
 - index: Numeric identifier for the element
 - type: HTML element type (div, p, button, input, h1, img, etc.)
 - text: Element description or text content
+- An element tagged "hidden" (e.g. [index]<type hidden>text</type>) is NOT
+  currently visible on the page — collapsed by responsive CSS at this
+  viewport width, inside a menu/modal that isn't open, or otherwise not
+  rendered. Its text may come only from an attribute like aria-label/title,
+  not from anything a user can actually see or a screenshot would show.
 Example:
 [15]<h1>Welcome to Our Site</h1>
 [33]<button>Submit Form</button>
 [42]<p>This is a paragraph of text</p>
+[57]<button hidden>Open menu</button>
 
 # Response Rules
 1. RESPONSE FORMAT: You must ALWAYS respond with valid JSON in this exact format:
@@ -360,12 +384,18 @@ Example:
 - You can select ANY element (interactive or non-interactive)
 - This includes headings, paragraphs, divs, images, buttons, inputs, etc.
 - Consider the element's text content, attributes, and context
+- Do not select an element tagged "hidden" unless the description itself
+  expects the target to be hidden, closed, or not shown. Otherwise treat a
+  "hidden" element as if it doesn't match at all, even when its text or
+  attributes look like a strong textual match — a hidden element cannot be
+  what a description of something on the page actually refers to.
 - If multiple elements could match, choose the most specific one
 - If no element matches the description, return null
 - Consider the element's position and hierarchy in the DOM
 
 3. VISUAL CONTEXT:
-- When an image is provided, use it to understand the page layout
+- When an image is provided, use it to understand the page layout — a
+  "hidden" element will not appear anywhere in the screenshot
 - Bounding boxes with labels on their top right corner correspond to element indexes
 
 Your responses must be always JSON with the specified format.`;
@@ -378,11 +408,13 @@ Your responses must be always JSON with the specified format.`;
    */
   private createUserMessageForAllElements(
     prompt: string,
-    browserState: BrowserState
+    browserState: BrowserState,
+    visibilityFilter: ElementVisibilityFilter = "any"
   ): HumanMessage {
     const elementsText = this.formatAllElementsForLLM(
       browserState.elementTree,
-      browserState.elementMap
+      browserState.elementMap,
+      visibilityFilter
     );
 
     const hasContentAbove = browserState.pixels_above > 0;
@@ -435,18 +467,35 @@ User Prompt: ${prompt}
   }
 
   /**
-   * Format ALL elements (interactive + non-interactive) for LLM
+   * Format ALL elements (interactive + non-interactive) for LLM.
+   *
+   * Every element is tagged with its actual visibility (`isVisible`, computed
+   * from real `getComputedStyle`/bounding-rect checks during DOM extraction —
+   * see `buildDomTreeOverlay`). Without this, a button hidden by a responsive
+   * class like `md:hidden` is indistinguishable in this listing from a
+   * genuinely visible one: its only "text" often comes from an aria-label/
+   * title fallback (`DOMElementNode.getDirectTextContent`), so it can read as
+   * a strong match for a description that names visible page content.
+   *
+   * `visibilityFilter` lets a caller remove the wrong half of the pool
+   * entirely before the model ever sees it, for assertions whose target can
+   * only ever be visible (or only ever hidden) by definition.
    */
   private formatAllElementsForLLM(
     elementTree: DOMElementNode,
-    elementMap: ElementMap
+    elementMap: ElementMap,
+    visibilityFilter: ElementVisibilityFilter = "any"
   ): string {
     const formattedText: string[] = [];
 
-    // Process all elements from elementMap
-    const sortedElements = Object.values(elementMap).sort(
-      (a, b) => (a.elementIndex || 0) - (b.elementIndex || 0)
-    );
+    // Process all elements from elementMap, honoring the visibility filter.
+    const sortedElements = Object.values(elementMap)
+      .filter((node) => {
+        if (visibilityFilter === "visible-only") return node.isVisible;
+        if (visibilityFilter === "hidden-only") return !node.isVisible;
+        return true;
+      })
+      .sort((a, b) => (a.elementIndex || 0) - (b.elementIndex || 0));
 
     for (const node of sortedElements) {
       if (node.elementIndex !== null) {
@@ -470,7 +519,9 @@ User Prompt: ${prompt}
           attributesStr = attributes.join(";");
         }
 
-        let line = `[${node.elementIndex}]<${node.tagName}`;
+        const visibilityTag = node.isVisible ? "" : " hidden";
+
+        let line = `[${node.elementIndex}]<${node.tagName}${visibilityTag}`;
         if (attributesStr) line += ` ${attributesStr}`;
         if (text) line += `>${text}</${node.tagName}>`;
         else line += "/>";
