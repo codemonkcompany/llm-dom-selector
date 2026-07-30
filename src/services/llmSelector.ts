@@ -107,11 +107,23 @@ export class LLMSelector {
     browserState: BrowserState,
     visibilityFilter: ElementVisibilityFilter = "any"
   ): Promise<ElementSelectionResult> {
+    // Computed once and used for BOTH the prompt text and the response
+    // lookup below, so a selectedIndex can only ever resolve to something
+    // the model actually saw. Looking it up against the full, unfiltered
+    // elementMap instead would let a hallucinated (or misremembered) index
+    // silently resolve to a real but filtered-out element — e.g. a
+    // "visible-only" search returning something the model was never shown,
+    // because it happens to share that index in the full map.
+    const candidateElements = this.filterElementsByVisibility(
+      browserState.elementMap,
+      visibilityFilter
+    );
+
     const systemPrompt = this.createSystemPromptForAllElements();
     const userMessage = this.createUserMessageForAllElements(
       prompt,
       browserState,
-      visibilityFilter
+      candidateElements
     );
 
     const messages = [systemPrompt, userMessage];
@@ -121,7 +133,7 @@ export class LLMSelector {
         const response = await this.llm.invoke(messages);
         const result = this.parseLLMResponseForAllElements(
           response.content as string,
-          browserState.elementMap
+          candidateElements
         );
 
         if (result.selectedElement) {
@@ -409,13 +421,9 @@ Your responses must be always JSON with the specified format.`;
   private createUserMessageForAllElements(
     prompt: string,
     browserState: BrowserState,
-    visibilityFilter: ElementVisibilityFilter = "any"
+    candidateElements: ElementMap
   ): HumanMessage {
-    const elementsText = this.formatAllElementsForLLM(
-      browserState.elementTree,
-      browserState.elementMap,
-      visibilityFilter
-    );
+    const elementsText = this.formatAllElementsForLLM(candidateElements);
 
     const hasContentAbove = browserState.pixels_above > 0;
     const hasContentBelow = browserState.pixels_below > 0;
@@ -467,6 +475,26 @@ User Prompt: ${prompt}
   }
 
   /**
+   * Restricts an elementMap to the pool a given visibility filter allows,
+   * used for BOTH what's shown to the model and what a returned index is
+   * allowed to resolve to — see the call site in {@link selectElementFromAllElements}.
+   */
+  private filterElementsByVisibility(
+    elementMap: ElementMap,
+    visibilityFilter: ElementVisibilityFilter
+  ): ElementMap {
+    if (visibilityFilter === "any") return elementMap;
+
+    const filtered: ElementMap = {};
+    for (const [key, node] of Object.entries(elementMap)) {
+      const keep =
+        visibilityFilter === "visible-only" ? node.isVisible : !node.isVisible;
+      if (keep) filtered[Number(key)] = node;
+    }
+    return filtered;
+  }
+
+  /**
    * Format ALL elements (interactive + non-interactive) for LLM.
    *
    * Every element is tagged with its actual visibility (`isVisible`, computed
@@ -477,25 +505,15 @@ User Prompt: ${prompt}
    * title fallback (`DOMElementNode.getDirectTextContent`), so it can read as
    * a strong match for a description that names visible page content.
    *
-   * `visibilityFilter` lets a caller remove the wrong half of the pool
-   * entirely before the model ever sees it, for assertions whose target can
-   * only ever be visible (or only ever hidden) by definition.
+   * `elementMap` is expected to already be filtered to the intended candidate
+   * pool (see {@link filterElementsByVisibility}) — this only formats it.
    */
-  private formatAllElementsForLLM(
-    elementTree: DOMElementNode,
-    elementMap: ElementMap,
-    visibilityFilter: ElementVisibilityFilter = "any"
-  ): string {
+  private formatAllElementsForLLM(elementMap: ElementMap): string {
     const formattedText: string[] = [];
 
-    // Process all elements from elementMap, honoring the visibility filter.
-    const sortedElements = Object.values(elementMap)
-      .filter((node) => {
-        if (visibilityFilter === "visible-only") return node.isVisible;
-        if (visibilityFilter === "hidden-only") return !node.isVisible;
-        return true;
-      })
-      .sort((a, b) => (a.elementIndex || 0) - (b.elementIndex || 0));
+    const sortedElements = Object.values(elementMap).sort(
+      (a, b) => (a.elementIndex || 0) - (b.elementIndex || 0)
+    );
 
     for (const node of sortedElements) {
       if (node.elementIndex !== null) {

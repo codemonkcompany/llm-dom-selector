@@ -168,21 +168,19 @@ describe("LLMSelector", () => {
     });
 
     test("tags a hidden element and leaves a visible one untagged, by default", () => {
-      const formatted = selector["formatAllElementsForLLM"](
-        visibleHeading,
-        elementMap
-      );
+      const candidates = selector["filterElementsByVisibility"](elementMap, "any");
+      const formatted = selector["formatAllElementsForLLM"](candidates);
 
       expect(formatted).toContain("[10]<h1/>");
       expect(formatted).toContain("[20]<button hidden>Open menu</button>");
     });
 
     test('"visible-only" removes the hidden element from the listing entirely', () => {
-      const formatted = selector["formatAllElementsForLLM"](
-        visibleHeading,
+      const candidates = selector["filterElementsByVisibility"](
         elementMap,
         "visible-only"
       );
+      const formatted = selector["formatAllElementsForLLM"](candidates);
 
       expect(formatted).toContain("[10]<h1");
       expect(formatted).not.toContain("[20]<button");
@@ -190,14 +188,30 @@ describe("LLMSelector", () => {
     });
 
     test('"hidden-only" removes the visible element from the listing entirely', () => {
-      const formatted = selector["formatAllElementsForLLM"](
-        visibleHeading,
+      const candidates = selector["filterElementsByVisibility"](
         elementMap,
         "hidden-only"
       );
+      const formatted = selector["formatAllElementsForLLM"](candidates);
 
       expect(formatted).not.toContain("[10]<h1");
       expect(formatted).toContain("[20]<button hidden");
+    });
+
+    test("a selectedIndex outside the filtered pool cannot resolve to a filtered-out element", () => {
+      // Guards the lookup-bypass bug: the model must not be able to select
+      // something it was never shown just because that index exists in the
+      // full, unfiltered elementMap.
+      const candidates = selector["filterElementsByVisibility"](
+        elementMap,
+        "visible-only"
+      );
+      const result = selector["parseLLMResponseForAllElements"](
+        JSON.stringify({ selectedIndex: 20, confidence: 0.9, reasoning: "test" }),
+        candidates
+      );
+
+      expect(result.selectedElement).toBeNull();
     });
   });
 

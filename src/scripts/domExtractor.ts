@@ -351,6 +351,12 @@ export function buildDomTreeOverlay(args: {
           children.push(textNodeId);
         }
       } else if (childNode.nodeType === Node.ELEMENT_NODE) {
+        // The highlight overlay was just injected into the page (above, for
+        // visual debugging) by this very same scan — it must never be walked
+        // as page content, or its own numbered highlight boxes end up in the
+        // element pool shown to the LLM as if they were real candidates.
+        if (childNode === highlightContainer) continue;
+
         // Process element child
         const childId = traverseElement(childNode as Element, nodeId);
         children.push(childId);
