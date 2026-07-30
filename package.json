@@ -1,6 +1,6 @@
 {
   "name": "@codemonkcompany/llm-dom-selector",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "A TypeScript library that uses LLM to intelligently select DOM elements from web pages using Playwright",
   "keywords": [
     "llm",

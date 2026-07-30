@@ -60,12 +60,16 @@ export function buildDomTreeOverlay(args: {
 
     const path: string[] = [];
     let current: Element | null = element;
+    // Set when the climb stops early at an id-bearing ancestor (anything
+    // other than <html>/<body>) rather than reaching the true document root.
+    let anchoredAtAncestorId = false;
 
     while (current && current.nodeType === Node.ELEMENT_NODE) {
       let selector = current.nodeName.toLowerCase();
       if (current.id) {
         selector += `[@id="${current.id}"]`;
         path.unshift(selector);
+        anchoredAtAncestorId = true;
         break;
       } else {
         let sibling = current.previousElementSibling;
@@ -84,7 +88,13 @@ export function buildDomTreeOverlay(args: {
       current = current.parentElement;
     }
 
-    return "/" + path.join("/");
+    // A single leading slash is a document-root-anchored absolute path, valid
+    // only when the climb reached <html>. When it stopped early at an
+    // ancestor's id instead, that ancestor is virtually never a direct child
+    // of the Document node (e.g. a framework's `#__nuxt`/`#app`/`#root` mount
+    // div sits under <body>), so the path needs the "search anywhere" `//`
+    // prefix — otherwise it silently matches zero elements.
+    return (anchoredAtAncestorId ? "//" : "/") + path.join("/");
   }
 
   // Helper function to check if element is visible
