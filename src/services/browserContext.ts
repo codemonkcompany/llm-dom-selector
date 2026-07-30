@@ -1,6 +1,7 @@
 import { Page, ElementHandle, FrameLocator } from "playwright";
 import { DomService } from "./domService";
 import { DOMElementNode, SelectorMap, ElementMap } from "../types/dom";
+import { mergeElementsByXPath, buildIndexedMaps } from "./scrollMerge";
 
 // BrowserState interface based on the original project
 export interface BrowserState {
@@ -22,6 +23,25 @@ export interface BrowserContextConfig {
   waitBetweenActions: number;
   headless: boolean;
 }
+
+export interface ScrollCollectConfig {
+  /**
+   * Hard cap on scroll iterations. This is what keeps an infinite-scroll /
+   * lazy-loading feed from turning this into an unbounded loop: growth is
+   * rechecked after every step, but iterations stop here regardless of
+   * whether the page is still reporting new content.
+   */
+  maxScrollAttempts: number;
+  /** CSS pixels to scroll per step. Defaults to the viewport height. */
+  scrollStepPx?: number;
+  /** Wait after each scroll for lazy-loaded content to render before re-snapshotting. */
+  settleMs: number;
+}
+
+const DEFAULT_SCROLL_COLLECT_CONFIG: ScrollCollectConfig = {
+  maxScrollAttempts: 6,
+  settleMs: 700,
+};
 
 export class BrowserContext {
   private page: Page;
@@ -79,6 +99,105 @@ export class BrowserContext {
       }
       throw e;
     }
+  }
+
+  /**
+   * Like {@link getState}, but scrolls through the page collecting elements
+   * across multiple scroll positions and merges them into one pool, instead
+   * of only seeing whatever's in the current viewport.
+   *
+   * Exists because `isVisible` (and therefore `highlightIndex`/inclusion in
+   * `selectorMap`) is computed relative to the CURRENT scroll position — an
+   * element further down a long page is invisible to a single snapshot no
+   * matter how far `viewportExpansion` reaches, so an LLM element search
+   * over one snapshot can never find it. This is the more expensive fallback
+   * for when that single-snapshot search comes back empty; it isn't the
+   * default because most pages don't need it.
+   *
+   * Bounded by `maxScrollAttempts` rather than "scroll until the bottom
+   * stops moving" — a genuinely infinite-scroll feed would otherwise never
+   * stop growing, so growth is used only to decide whether to keep going
+   * *within* the cap, never to extend the cap itself. The page's original
+   * scroll position is restored before returning, so this has no visible
+   * side effect on the caller.
+   */
+  async getStateAcrossScroll(
+    overrides: Partial<ScrollCollectConfig> = {}
+  ): Promise<BrowserState> {
+    const cfg = { ...DEFAULT_SCROLL_COLLECT_CONFIG, ...overrides };
+    const originalScrollY = await this.page.evaluate(() => window.scrollY);
+
+    const pool = new Map<string, DOMElementNode>();
+    let baseState: BrowserState | null = null;
+
+    const absorb = (state: BrowserState) => {
+      if (!baseState) baseState = state;
+      mergeElementsByXPath(pool, state.elementMap);
+    };
+
+    absorb(await this.updateState());
+    let lastScrollHeight = await this.page.evaluate(
+      () => document.body.scrollHeight
+    );
+
+    for (let attempt = 0; attempt < cfg.maxScrollAttempts; attempt++) {
+      const scrollYBefore = await this.page.evaluate(() => window.scrollY);
+
+      // `behavior: "instant"` sidesteps pages that set `scroll-behavior:
+      // smooth` (common) — with smooth scrolling, the scroll animates over
+      // the following ~300-500ms, so reading scrollY back in the same
+      // evaluate call (or even right after it) would still read the
+      // pre-scroll position. Forcing instant scrolling here makes the
+      // "did we move" check below reliable regardless of page CSS.
+      await this.page.evaluate((stepPx) => {
+        window.scrollBy({
+          top: stepPx && stepPx > 0 ? stepPx : window.innerHeight,
+          left: 0,
+          behavior: "instant",
+        });
+      }, cfg.scrollStepPx);
+
+      await this.page.waitForTimeout(cfg.settleMs);
+
+      const scrollYAfter = await this.page.evaluate(() => window.scrollY);
+      const scrolled = scrollYAfter !== scrollYBefore;
+
+      const newScrollHeight = await this.page.evaluate(
+        () => document.body.scrollHeight
+      );
+      const grew = newScrollHeight > lastScrollHeight;
+      lastScrollHeight = newScrollHeight;
+
+      if (!scrolled && !grew) {
+        // Couldn't scroll further and nothing new arrived — a genuine end
+        // of content, not just a slow-loading batch. Further iterations
+        // would find nothing new.
+        break;
+      }
+
+      absorb(await this.updateState());
+    }
+
+    await this.page.evaluate(
+      (y) => window.scrollTo({ top: y, left: 0, behavior: "instant" }),
+      originalScrollY
+    );
+    // The cached state now reflects the deepest scroll position visited,
+    // not the restored one — invalidate so the next real getState() call
+    // re-derives a snapshot that matches where the page actually is.
+    this.currentState = null;
+
+    const { selectorMap, elementMap } = buildIndexedMaps(pool);
+
+    return {
+      ...baseState!,
+      selectorMap,
+      elementMap,
+      // Multiple scroll positions were sampled to build this pool — no
+      // single screenshot represents all of them, so vision is disabled
+      // here rather than showing the model a partial, misleading image.
+      screenshot: "",
+    };
   }
 
   async takeScreenshot(fullPage: boolean = false): Promise<string> {

@@ -9,6 +9,7 @@ export {
   BrowserContext,
   type BrowserState,
   type BrowserContextConfig,
+  type ScrollCollectConfig,
 } from "./services/browserContext";
 export { DomService } from "./services/domService";
 export {
@@ -24,7 +25,11 @@ export {
 } from "./types/dom";
 
 // Main class that combines all functionality
-import { BrowserContext, BrowserState } from "./services/browserContext";
+import {
+  BrowserContext,
+  BrowserState,
+  ScrollCollectConfig,
+} from "./services/browserContext";
 import {
   LLMSelector,
   ElementSelectionResult,
@@ -69,6 +74,22 @@ export class LLMDOMSelector {
   }
 
   /**
+   * Select an element using LLM, scrolling through the page and merging
+   * newly-revealed elements first. Use as a fallback after {@link selectElement}
+   * finds nothing — the target may simply be further down the page than a
+   * single viewport snapshot can see. See {@link BrowserContext.getStateAcrossScroll}.
+   */
+  async selectElementAcrossScroll(
+    prompt: string,
+    scrollConfig?: Partial<ScrollCollectConfig>
+  ): Promise<ElementSelectionResult> {
+    const browserState = await this.browserContext.getStateAcrossScroll(
+      scrollConfig
+    );
+    return await this.llmSelector.selectElement(prompt, browserState);
+  }
+
+  /**
    * Select an element using LLM based on a text description
    */
   async selectElement(prompt: string): Promise<ElementSelectionResult> {
@@ -90,6 +111,26 @@ export class LLMDOMSelector {
     visibilityFilter: ElementVisibilityFilter = "any"
   ): Promise<ElementSelectionResult> {
     const browserState = await this.browserContext.getState();
+    return await this.llmSelector.selectElementFromAllElements(
+      prompt,
+      browserState,
+      visibilityFilter
+    );
+  }
+
+  /**
+   * Select an element from ALL elements, scrolling through the page and
+   * merging newly-revealed elements first. Use as a fallback after
+   * {@link selectElementFromAllElements} finds nothing.
+   */
+  async selectElementFromAllElementsAcrossScroll(
+    prompt: string,
+    visibilityFilter: ElementVisibilityFilter = "any",
+    scrollConfig?: Partial<ScrollCollectConfig>
+  ): Promise<ElementSelectionResult> {
+    const browserState = await this.browserContext.getStateAcrossScroll(
+      scrollConfig
+    );
     return await this.llmSelector.selectElementFromAllElements(
       prompt,
       browserState,
