@@ -4,7 +4,10 @@ export {
   type ElementSelectionResult,
   type LLMSelectorConfig,
   type ElementVisibilityFilter,
+  type RetryConfig,
+  type ScreenshotDetail,
 } from "./services/llmSelector";
+export { RateLimitError } from "./services/errors";
 export {
   BrowserContext,
   type BrowserState,

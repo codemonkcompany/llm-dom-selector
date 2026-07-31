@@ -2,11 +2,33 @@ import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { DOMElementNode, SelectorMap, ElementMap } from "../types/dom";
 import { BrowserState } from "./browserContext";
+import { RateLimitError } from "./errors";
+
+export interface RetryConfig {
+  /** Attempts per call, including the first. */
+  maxRetries: number;
+  initialDelayMs: number;
+  maxDelayMs: number;
+}
+
+/**
+ * How much detail the model is asked to read from the screenshot.
+ *
+ * "low" is a flat ~85 tokens; "high"/"auto" tile a full-page screenshot into
+ * thousands. Since the actual decision is made against the indexed element
+ * listing and the screenshot only supplies layout context — with bounding boxes
+ * that stay legible when downsampled — "low" is usually the right trade. It is
+ * the single biggest lever on tokens-per-minute when many selections run
+ * concurrently.
+ */
+export type ScreenshotDetail = "low" | "high" | "auto";
 
 export interface LLMSelectorConfig {
   includeAttributes: string[];
   useVision: boolean;
   maxRetries: number;
+  retry: RetryConfig;
+  screenshotDetail: ScreenshotDetail;
 }
 
 /**
@@ -56,8 +78,119 @@ export class LLMSelector {
       ],
       useVision: true,
       maxRetries: 3,
+      retry: {
+        maxRetries: 3,
+        initialDelayMs: 1_000,
+        maxDelayMs: 30_000,
+      },
+      // "auto" preserves the previous behaviour for existing consumers.
+      screenshotDetail: "auto",
       ...config,
     };
+
+    // maxRetries was the only retry knob before retry {} existed. Honour it
+    // when a caller sets it alone, so upgrading doesn't silently change how
+    // many attempts they get.
+    if (config.maxRetries !== undefined && config.retry === undefined) {
+      this.config.retry = {
+        ...this.config.retry,
+        maxRetries: config.maxRetries,
+      };
+    }
+  }
+
+  /**
+   * Invokes the model, retrying with backoff on transient failures.
+   *
+   * This replaces two identical copies of a loop that retried immediately, with
+   * no sleep and no error discrimination — so a 429 was hammered again the
+   * instant the provider asked us to slow down, and a malformed request was
+   * retried three times for nothing.
+   */
+  private async invokeWithRetry(messages: any[]): Promise<any> {
+    const { maxRetries, initialDelayMs, maxDelayMs } = this.config.retry;
+
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await this.llm.invoke(messages);
+      } catch (error) {
+        lastError = error;
+
+        const status = this.statusOf(error);
+
+        // A bad request, bad key or missing model will fail identically every
+        // time. Retrying is pure latency and cost.
+        if (status !== undefined && status !== 429 && status < 500) {
+          throw error;
+        }
+
+        if (attempt === maxRetries - 1) {
+          break;
+        }
+
+        // Honour the provider's own instruction when it gives one; it knows
+        // when the window resets and we do not.
+        const retryAfterMs = this.retryAfterMsOf(error);
+        const backoffMs = Math.min(maxDelayMs, initialDelayMs * 2 ** attempt);
+        const delayMs =
+          retryAfterMs ?? Math.floor(Math.random() * backoffMs);
+
+        console.warn(
+          `LLM invoke attempt ${attempt + 1}/${maxRetries} failed` +
+            (status ? ` (status ${status})` : "") +
+            `, retrying in ${Math.round(delayMs)}ms`
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
+    if (this.statusOf(lastError) === 429) {
+      throw new RateLimitError(
+        `Rate limited after ${maxRetries} attempts: ${
+          lastError instanceof Error ? lastError.message : String(lastError)
+        }`,
+        this.retryAfterMsOf(lastError)
+      );
+    }
+
+    throw lastError;
+  }
+
+  private statusOf(error: unknown): number | undefined {
+    const status = (error as any)?.status ?? (error as any)?.response?.status;
+
+    return typeof status === "number" ? status : undefined;
+  }
+
+  /**
+   * Reads the provider's retry hint. `retry-after-ms` is preferred over
+   * `retry-after` because OpenAI reports sub-second waits there — rounding
+   * "234ms" up to a whole second would idle a worker for no reason.
+   */
+  private retryAfterMsOf(error: unknown): number | undefined {
+    const headers = (error as any)?.headers;
+
+    if (!headers) {
+      return undefined;
+    }
+
+    const read = (name: string): string | undefined =>
+      typeof headers.get === "function" ? headers.get(name) : headers[name];
+
+    const ms = Number(read("retry-after-ms"));
+    if (Number.isFinite(ms) && ms >= 0) {
+      return ms;
+    }
+
+    const seconds = Number(read("retry-after"));
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return seconds * 1000;
+    }
+
+    return undefined;
   }
 
   async selectElement(
@@ -69,25 +202,16 @@ export class LLMSelector {
 
     const messages = [systemPrompt, userMessage];
 
-    for (let attempt = 0; attempt < this.config.maxRetries; attempt++) {
-      try {
-        const response = await this.llm.invoke(messages);
-        const result = this.parseLLMResponse(
-          response.content as string,
-          browserState.selectorMap
-        );
+    // A RateLimitError from here propagates deliberately: the caller must be
+    // able to tell throttling from "no element matched" (see errors.ts).
+    const response = await this.invokeWithRetry(messages);
+    const result = this.parseLLMResponse(
+      response.content as string,
+      browserState.selectorMap
+    );
 
-        if (result.selectedElement) {
-          return result;
-        }
-      } catch (error) {
-        console.warn(`LLM selection attempt ${attempt + 1} failed:`, error);
-        if (attempt === this.config.maxRetries - 1) {
-          throw new Error(
-            `Failed to select element after ${this.config.maxRetries} attempts: ${error}`
-          );
-        }
-      }
+    if (result.selectedElement) {
+      return result;
     }
 
     return {
@@ -128,25 +252,16 @@ export class LLMSelector {
 
     const messages = [systemPrompt, userMessage];
 
-    for (let attempt = 0; attempt < this.config.maxRetries; attempt++) {
-      try {
-        const response = await this.llm.invoke(messages);
-        const result = this.parseLLMResponseForAllElements(
-          response.content as string,
-          candidateElements
-        );
+    // A RateLimitError from here propagates deliberately: the caller must be
+    // able to tell throttling from "no element matched" (see errors.ts).
+    const response = await this.invokeWithRetry(messages);
+    const result = this.parseLLMResponseForAllElements(
+      response.content as string,
+      candidateElements
+    );
 
-        if (result.selectedElement) {
-          return result;
-        }
-      } catch (error) {
-        console.warn(`LLM selection attempt ${attempt + 1} failed:`, error);
-        if (attempt === this.config.maxRetries - 1) {
-          throw new Error(
-            `Failed to select element after ${this.config.maxRetries} attempts: ${error}`
-          );
-        }
-      }
+    if (result.selectedElement) {
+      return result;
     }
 
     return {
@@ -246,6 +361,7 @@ User Prompt: ${prompt}
             type: "image_url",
             image_url: {
               url: `data:image/png;base64,${browserState.screenshot}`,
+              detail: this.config.screenshotDetail,
             },
           },
         ],
@@ -465,6 +581,7 @@ User Prompt: ${prompt}
             type: "image_url",
             image_url: {
               url: `data:image/png;base64,${browserState.screenshot}`,
+              detail: this.config.screenshotDetail,
             },
           },
         ],
