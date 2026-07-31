@@ -26,12 +26,23 @@ export interface BrowserContextConfig {
 
 export interface ScrollCollectConfig {
   /**
-   * Hard cap on scroll iterations. This is what keeps an infinite-scroll /
-   * lazy-loading feed from turning this into an unbounded loop: growth is
-   * rechecked after every step, but iterations stop here regardless of
-   * whether the page is still reporting new content.
+   * How many times to redo a full "scroll to the bottom" pass after the page
+   * grew during the previous pass (new content loaded in response to
+   * scrolling — infinite scroll / lazy loading). This is what keeps an
+   * infinite-scroll feed from turning this into an unbounded loop: a
+   * genuinely endless feed always reports growth again, so iteration stops
+   * here regardless of whether it's still growing.
    */
-  maxScrollAttempts: number;
+  maxContentLoadCycles: number;
+  /**
+   * Defensive ceiling on scroll steps WITHIN a single bottom-reaching pass.
+   * This is not the normal limiting factor — a pass ends naturally once
+   * `scrollY` stops moving, i.e. the actual bottom for whatever content
+   * exists right now, however many steps that takes. It only guards against
+   * a page whose scroll position never settles (e.g. a layout that keeps
+   * shifting) turning a single pass into a real infinite loop.
+   */
+  maxStepsPerCycle: number;
   /** CSS pixels to scroll per step. Defaults to the viewport height. */
   scrollStepPx?: number;
   /** Wait after each scroll for lazy-loaded content to render before re-snapshotting. */
@@ -39,7 +50,8 @@ export interface ScrollCollectConfig {
 }
 
 const DEFAULT_SCROLL_COLLECT_CONFIG: ScrollCollectConfig = {
-  maxScrollAttempts: 6,
+  maxContentLoadCycles: 3,
+  maxStepsPerCycle: 100,
   settleMs: 700,
 };
 
@@ -114,12 +126,17 @@ export class BrowserContext {
    * for when that single-snapshot search comes back empty; it isn't the
    * default because most pages don't need it.
    *
-   * Bounded by `maxScrollAttempts` rather than "scroll until the bottom
-   * stops moving" — a genuinely infinite-scroll feed would otherwise never
-   * stop growing, so growth is used only to decide whether to keep going
-   * *within* the cap, never to extend the cap itself. The page's original
-   * scroll position is restored before returning, so this has no visible
-   * side effect on the caller.
+   * Runs in up to `maxContentLoadCycles` passes, each scrolling all the way
+   * to the CURRENT real bottom of the page (however many steps that takes —
+   * not bounded by a step count, since page length varies enormously). A
+   * pass ending with more content on the page than when it started means
+   * scrolling triggered a lazy-load / infinite-scroll batch, so another pass
+   * runs to reach the new bottom too. A pass that ends with nothing new is
+   * genuine end-of-content and stops immediately. The cycle cap is what
+   * bounds a genuinely endless feed — such a page always "grows" again, so
+   * it would otherwise never stop on its own. The page's original scroll
+   * position is restored before returning, so this has no visible side
+   * effect on the caller.
    */
   async getStateAcrossScroll(
     overrides: Partial<ScrollCollectConfig> = {}
@@ -136,46 +153,51 @@ export class BrowserContext {
     };
 
     absorb(await this.updateState());
-    let lastScrollHeight = await this.page.evaluate(
-      () => document.body.scrollHeight
-    );
 
-    for (let attempt = 0; attempt < cfg.maxScrollAttempts; attempt++) {
-      const scrollYBefore = await this.page.evaluate(() => window.scrollY);
-
-      // `behavior: "instant"` sidesteps pages that set `scroll-behavior:
-      // smooth` (common) — with smooth scrolling, the scroll animates over
-      // the following ~300-500ms, so reading scrollY back in the same
-      // evaluate call (or even right after it) would still read the
-      // pre-scroll position. Forcing instant scrolling here makes the
-      // "did we move" check below reliable regardless of page CSS.
-      await this.page.evaluate((stepPx) => {
-        window.scrollBy({
-          top: stepPx && stepPx > 0 ? stepPx : window.innerHeight,
-          left: 0,
-          behavior: "instant",
-        });
-      }, cfg.scrollStepPx);
-
-      await this.page.waitForTimeout(cfg.settleMs);
-
-      const scrollYAfter = await this.page.evaluate(() => window.scrollY);
-      const scrolled = scrollYAfter !== scrollYBefore;
-
-      const newScrollHeight = await this.page.evaluate(
+    for (let cycle = 0; cycle < cfg.maxContentLoadCycles; cycle++) {
+      const scrollHeightBeforeCycle = await this.page.evaluate(
         () => document.body.scrollHeight
       );
-      const grew = newScrollHeight > lastScrollHeight;
-      lastScrollHeight = newScrollHeight;
 
-      if (!scrolled && !grew) {
-        // Couldn't scroll further and nothing new arrived — a genuine end
-        // of content, not just a slow-loading batch. Further iterations
-        // would find nothing new.
-        break;
+      for (let step = 0; step < cfg.maxStepsPerCycle; step++) {
+        const scrollYBefore = await this.page.evaluate(() => window.scrollY);
+
+        // `behavior: "instant"` sidesteps pages that set `scroll-behavior:
+        // smooth` (common) — with smooth scrolling, the scroll animates over
+        // the following ~300-500ms, so reading scrollY back in the same
+        // evaluate call (or even right after it) would still read the
+        // pre-scroll position. Forcing instant scrolling here makes the
+        // "did we move" check below reliable regardless of page CSS.
+        await this.page.evaluate((stepPx) => {
+          window.scrollBy({
+            top: stepPx && stepPx > 0 ? stepPx : window.innerHeight,
+            left: 0,
+            behavior: "instant",
+          });
+        }, cfg.scrollStepPx);
+
+        await this.page.waitForTimeout(cfg.settleMs);
+
+        const scrollYAfter = await this.page.evaluate(() => window.scrollY);
+        if (scrollYAfter === scrollYBefore) {
+          // Couldn't scroll any further — the real bottom for whatever
+          // content exists right now.
+          break;
+        }
+
+        absorb(await this.updateState());
       }
 
-      absorb(await this.updateState());
+      const scrollHeightAfterCycle = await this.page.evaluate(
+        () => document.body.scrollHeight
+      );
+
+      if (scrollHeightAfterCycle <= scrollHeightBeforeCycle) {
+        // Reaching the bottom didn't load anything new — genuine end of
+        // content, not just a slow-loading batch. Further cycles would find
+        // nothing new.
+        break;
+      }
     }
 
     await this.page.evaluate(
