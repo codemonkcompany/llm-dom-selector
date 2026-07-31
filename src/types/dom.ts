@@ -67,6 +67,13 @@ export class DOMElementNode implements DOMBaseNode {
   shadowRoot: boolean = false;
   highlightIndex: number | null = null; // Index for interactive elements only
   elementIndex: number | null = null; // Index for ALL elements (interactive + non-interactive)
+  /**
+   * The `window.scrollY` position at which this element was last observed
+   * VISIBLE (null if never observed visible). Lets a caller that remembers
+   * this element from a past scroll sweep jump straight back to where it can
+   * actually be seen/interacted with, instead of re-sweeping the whole page.
+   */
+  scrollY: number | null = null;
   viewportCoordinates: CoordinateSet | null = null;
   pageCoordinates: CoordinateSet | null = null;
   viewportInfo: ViewportInfo | null = null;

@@ -134,9 +134,19 @@ export class BrowserContext {
    * runs to reach the new bottom too. A pass that ends with nothing new is
    * genuine end-of-content and stops immediately. The cycle cap is what
    * bounds a genuinely endless feed — such a page always "grows" again, so
-   * it would otherwise never stop on its own. The page's original scroll
+   * it would otherwise never stop on its own.
+   *
+   * Always starts by resetting to the very TOP of the page, regardless of
+   * where the caller currently has it scrolled — a prior, unrelated action
+   * (e.g. an earlier step that scrolled to the bottom) must never bias which
+   * portion of the page this sweep can see. The page's original scroll
    * position is restored before returning, so this has no visible side
-   * effect on the caller.
+   * effect on the caller beyond that.
+   *
+   * Every element absorbed here is stamped with the `scrollY` it was seen
+   * VISIBLE at (see {@link DOMElementNode.scrollY}), so a caller that keeps
+   * the results around can jump straight back to a remembered element later
+   * instead of re-sweeping — see {@link mergeCachedElements}.
    */
   async getStateAcrossScroll(
     overrides: Partial<ScrollCollectConfig> = {}
@@ -147,12 +157,20 @@ export class BrowserContext {
     const pool = new Map<string, DOMElementNode>();
     let baseState: BrowserState | null = null;
 
-    const absorb = (state: BrowserState) => {
+    const absorb = (state: BrowserState, scrollY: number) => {
       if (!baseState) baseState = state;
+      for (const element of Object.values(state.elementMap)) {
+        if (element.isVisible) element.scrollY = scrollY;
+      }
       mergeElementsByXPath(pool, state.elementMap);
     };
 
-    absorb(await this.updateState());
+    await this.page.evaluate(
+      () => window.scrollTo({ top: 0, left: 0, behavior: "instant" })
+    );
+    await this.page.waitForTimeout(cfg.settleMs);
+
+    absorb(await this.updateState(), 0);
 
     for (let cycle = 0; cycle < cfg.maxContentLoadCycles; cycle++) {
       const scrollHeightBeforeCycle = await this.page.evaluate(
@@ -185,7 +203,7 @@ export class BrowserContext {
           break;
         }
 
-        absorb(await this.updateState());
+        absorb(await this.updateState(), scrollYAfter);
       }
 
       const scrollHeightAfterCycle = await this.page.evaluate(
@@ -219,6 +237,57 @@ export class BrowserContext {
       // single screenshot represents all of them, so vision is disabled
       // here rather than showing the model a partial, misleading image.
       screenshot: "",
+    };
+  }
+
+  /**
+   * Augments a live state (from {@link getState}) with elements remembered
+   * from a PAST {@link getStateAcrossScroll} sweep — e.g. one a caller ran
+   * for an earlier step and kept around, so a later step doesn't have to pay
+   * for a full page sweep again just to rediscover the same elements.
+   *
+   * A remembered element never displaces a live one for the same xpath: the
+   * live snapshot is merged in first, and {@link mergeElementsByXPath}'s
+   * existing "on-screen supersedes off-screen" rule means a cached entry can
+   * only fill a gap, never overwrite what the page actually looks like right
+   * now. The live screenshot is kept only when nothing from the cache was
+   * actually needed (every candidate was already covered by the live view) —
+   * the moment a cached, currently-off-screen element is added to the pool,
+   * that one screenshot can no longer represent everything being listed, so
+   * vision is disabled for this call the same way `getStateAcrossScroll`
+   * disables it for a multi-position sweep.
+   */
+  mergeCachedElements(
+    liveState: BrowserState,
+    cachedElements: DOMElementNode[]
+  ): BrowserState {
+    const pool = new Map<string, DOMElementNode>();
+    mergeElementsByXPath(pool, liveState.elementMap);
+
+    const cachedAsMap: ElementMap = {};
+    cachedElements.forEach((element, index) => {
+      cachedAsMap[index] = element;
+    });
+
+    // Mirrors mergeElementsByXPath's own upgrade rule, just to detect (before
+    // mutating the pool) whether any cached entry will actually be used.
+    let cacheContributed = false;
+    for (const element of Object.values(cachedAsMap)) {
+      const current = pool.get(element.xpath);
+      if (!current || (!current.isVisible && element.isVisible)) {
+        cacheContributed = true;
+      }
+    }
+
+    mergeElementsByXPath(pool, cachedAsMap);
+
+    const { selectorMap, elementMap } = buildIndexedMaps(pool);
+
+    return {
+      ...liveState,
+      selectorMap,
+      elementMap,
+      screenshot: cacheContributed ? "" : liveState.screenshot,
     };
   }
 
